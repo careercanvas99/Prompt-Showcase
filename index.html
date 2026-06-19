@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PromptAI Gallery</title>
+  <meta name="description" content="Discover and copy the exact prompts behind stunning AI-generated images." />
+
+  <!-- Favicon (inline SVG data URI — no file needed) -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>✦</text></svg>" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <!-- Supabase JS SDK (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+  <!-- Styles -->
+  <link rel="stylesheet" href="style.css" />
+
+  <!--
+  ╔══════════════════════════════════════════════════════════╗
+  ║              SUPABASE DATABASE SETUP                     ║
+  ║  Run this SQL once in your Supabase SQL Editor:          ║
+  ╚══════════════════════════════════════════════════════════╝
+
+  -- Prompts table
+  create table if not exists prompts (
+    id          bigint primary key generated always as identity,
+    title       text not null,
+    image_url   text not null,
+    prompt_text text not null,
+    category    text default 'General',
+    created_at  timestamptz default now()
+  );
+
+  -- Admins table
+  create table if not exists admins (
+    id            bigint primary key generated always as identity,
+    username      text unique not null,
+    password_hash text not null
+  );
+
+  -- Row Level Security
+  alter table prompts enable row level security;
+  create policy "Public read"   on prompts for select using (true);
+  create policy "Admin insert"  on prompts for insert with check (true);
+  create policy "Admin update"  on prompts for update using (true);
+  create policy "Admin delete"  on prompts for delete using (true);
+
+  alter table admins enable row level security;
+  create policy "Public read admins" on admins for select using (true);
+
+  -- Default admin user (password = Divyabasam, SHA-256 hashed)
+  insert into admins (username, password_hash) values
+    ('Hari', '64b55f6626234dc26df4017bb40bb01f1abc4792b0f1cf0846f7243c0b17c483')
+  on conflict (username) do nothing;
+  -->
+</head>
+
+<body>
+
+  <!-- Background gradient orbs -->
+  <div class="orb orb-1" aria-hidden="true"></div>
+  <div class="orb orb-2" aria-hidden="true"></div>
+
+  <!-- ═══════════════════════════════════════
+       NAVIGATION
+       ═══════════════════════════════════════ -->
+  <nav role="navigation" aria-label="Main navigation">
+    <a href="#" class="logo" aria-label="PromptAI Home">
+      <div class="logo-icon" aria-hidden="true">✦</div>
+      <span class="logo-text">PromptAI</span>
+    </a>
+    <button class="nav-btn" id="adminNavBtn" onclick="openAdmin()" aria-label="Admin panel">
+      ⌘ Admin
+    </button>
+  </nav>
+
+  <!-- ═══════════════════════════════════════
+       HERO SECTION
+       ═══════════════════════════════════════ -->
+  <header class="hero" role="banner">
+    <div class="hero-badge" aria-label="Premium Gallery">Premium Gallery</div>
+    <h1>
+      Discover the Secrets Behind<br />
+      <span>Stunning AI Art</span>
+    </h1>
+    <p>Browse our curated collection of sophisticated prompts. Copy them and create your own masterpiece.</p>
+  </header>
+
+  <!-- ═══════════════════════════════════════
+       SEARCH & CATEGORY FILTERS
+       ═══════════════════════════════════════ -->
+  <section class="controls" aria-label="Search and filter">
+    <div class="search-wrap">
+      <label for="searchInput" class="visually-hidden">Search prompts</label>
+      <input
+        type="search"
+        id="searchInput"
+        placeholder="Search prompts…"
+        oninput="filterCards()"
+        autocomplete="off"
+      />
+    </div>
+    <div id="categoryFilters" role="group" aria-label="Category filters" style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="filter-btn active" onclick="setCategory('All', this)">All</button>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════
+       GALLERY GRID
+       ═══════════════════════════════════════ -->
+  <main id="gallery" class="gallery" role="main" aria-label="Prompt gallery">
+    <div class="state-msg">
+      <div class="spinner" role="status" aria-label="Loading"></div>
+      <p>Loading prompts…</p>
+    </div>
+  </main>
+
+  <!-- ═══════════════════════════════════════
+       FOOTER
+       ═══════════════════════════════════════ -->
+  <footer role="contentinfo">
+    © 2026 PromptAI | AI Prompt Gallery
+  </footer>
+
+  <!-- ═══════════════════════════════════════
+       PROMPT VIEW MODAL
+       ═══════════════════════════════════════ -->
+  <div
+    class="modal-overlay"
+    id="viewModal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="viewModalTitle"
+    onclick="closeViewModal(event)"
+  >
+    <div class="modal">
+      <button class="close-btn" onclick="closeViewModalDirect()" aria-label="Close modal">✕</button>
+      <div id="viewModalImg"></div>
+      <div class="modal-body">
+        <div class="modal-category" id="viewModalCat"></div>
+        <h2 class="modal-title" id="viewModalTitle"></h2>
+        <div class="prompt-box" id="viewModalPrompt"></div>
+        <button class="btn btn-primary" onclick="copyPrompt()">📋 Copy Prompt</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       ADMIN LOGIN OVERLAY
+       ═══════════════════════════════════════ -->
+  <div
+    class="admin-overlay"
+    id="adminOverlay"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="adminLoginTitle"
+    onclick="closeAdminOverlay(event)"
+  >
+    <div class="admin-panel" id="adminPanel">
+      <div style="text-align:center;font-size:40px;margin-bottom:16px;" aria-hidden="true">🛡️</div>
+      <h2 id="adminLoginTitle">Admin Access</h2>
+      <p>Sign in to manage the gallery</p>
+
+      <div class="form-group">
+        <label for="loginUser">Username</label>
+        <input type="text" id="loginUser" placeholder="Enter username" autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="loginPass">Password</label>
+        <input
+          type="password"
+          id="loginPass"
+          placeholder="Enter password"
+          autocomplete="current-password"
+          onkeydown="if(event.key==='Enter') doLogin()"
+        />
+      </div>
+      <div class="form-error" id="loginErr" style="margin-bottom:12px;display:none;" role="alert"></div>
+
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="closeAdmin()">Cancel</button>
+        <button class="btn btn-primary" onclick="doLogin()" id="loginBtn">Sign In</button>
+      </div>
+      <p style="margin-top:20px;text-align:center;">
+        <a href="#" onclick="closeAdmin(); return false;" style="color:var(--muted);font-size:13px;text-decoration:none;">
+          ← Back to gallery
+        </a>
+      </p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       ADMIN DASHBOARD OVERLAY
+       ═══════════════════════════════════════ -->
+  <div
+    class="dashboard-overlay"
+    id="dashboardOverlay"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="dashboardTitle"
+  >
+    <div class="dashboard">
+
+      <!-- Header -->
+      <div class="dashboard-header">
+        <div>
+          <div style="font-size:12px;color:var(--primary-light);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">
+            Admin Panel
+          </div>
+          <h2 id="dashboardTitle">✦ PromptAI Dashboard</h2>
+        </div>
+        <div class="actions">
+          <button class="btn btn-secondary" onclick="closeDashboard()">View Gallery</button>
+          <button class="btn btn-secondary" onclick="doLogout()">Sign Out</button>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats" id="statsRow" role="region" aria-label="Gallery statistics">
+        <div class="stat-card">
+          <div class="label">Total Prompts</div>
+          <div class="value" id="statTotal" aria-live="polite">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Categories</div>
+          <div class="value" id="statCats" aria-live="polite">—</div>
+        </div>
+      </div>
+
+      <!-- Add / Edit Form -->
+      <div class="prompt-form-card" role="region" aria-labelledby="formHeading">
+        <h3 id="formHeading">➕ Add New Prompt</h3>
+        <input type="hidden" id="editId" value="" />
+
+        <div class="form-group">
+          <label for="fTitle">Title</label>
+          <input type="text" id="fTitle" placeholder="e.g. Neon Cyberpunk Street" />
+        </div>
+
+        <div class="form-group">
+          <label for="fImageUrl">Image URL</label>
+          <input type="url" id="fImageUrl" placeholder="https://…" oninput="previewImg()" />
+          <img id="imgPreview" class="img-preview" alt="Image preview" />
+        </div>
+
+        <div class="form-group">
+          <label for="fPrompt">Prompt Text</label>
+          <textarea id="fPrompt" placeholder="Paste the full AI prompt used to generate this image…"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="fCategory">Category</label>
+          <select id="fCategory">
+            <option value="General">General</option>
+            <option value="Cityscape">Cityscape</option>
+            <option value="Fantasy">Fantasy</option>
+            <option value="Nature">Nature</option>
+            <option value="Abstract">Abstract</option>
+            <option value="Portrait">Portrait</option>
+            <option value="Sci-Fi">Sci-Fi</option>
+            <option value="Architecture">Architecture</option>
+            <option value="Art">Art</option>
+          </select>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-secondary" onclick="resetForm()">Clear</button>
+          <button class="btn btn-primary" onclick="savePrompt()" id="saveBtn">Save Prompt</button>
+        </div>
+      </div>
+
+      <!-- Prompt List -->
+      <h3 style="font-family:var(--font-display);margin-bottom:16px;">All Prompts</h3>
+      <div class="prompt-list" id="promptList" role="list">
+        <div style="color:var(--muted);font-size:14px;padding:20px 0;">Loading…</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       TOAST NOTIFICATION
+       ═══════════════════════════════════════ -->
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <!-- App Logic -->
+  <script src="script.js"></script>
+
+</body>
+</html>
